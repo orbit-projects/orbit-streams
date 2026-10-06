@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "orbit-streams"
+version = "0.1.0a1"
+description = "Bounded provider-neutral stream processing contracts for Orbit."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = []
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python :: 3",
+  "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+process = [
+  "orbit-core[process-plugins]>=0.1.0a1,<0.2",
+  "protobuf>=7.35.1,<8",
+]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.8,<1", "mypy>=1.13,<2", "build>=1.2,<2", "grpcio-tools>=1.84,<2", "mypy-protobuf>=3.6,<4"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orbit_streams"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"proto/orbit/streams/v1/stream_processing.proto" = "orbit_streams/v1/stream_processing.proto"
+
+[tool.hatch.build.targets.sdist.force-include]
+"proto/orbit/streams/v1/stream_processing.proto" = "proto/orbit/streams/v1/stream_processing.proto"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+  "src/orbit_streams/v1/stream_processing_pb2.py",
+  "src/orbit_streams/v1/stream_processing_pb2.pyi",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["orbit_streams"]
