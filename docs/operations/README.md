@@ -1,55 +1,50 @@
-# Orbit Streams: operations and security
+# Orbit Streams operations
 
-This guide organizes runtime behavior documented by the package. It does not certify production readiness. Verify provider/client versions, permissions, transport security, limits, and failure behavior in the target environment before release.
+The package transforms batches already supplied by the application; it does not connect to a
+broker. Integrate a source adapter explicitly and define whether the adapter acknowledges messages,
+commits offsets, or checkpoints only after downstream handling succeeds.
 
-## Configuration surface
+## Batch and concurrency capacity
 
-Environment names found in the package README:
+Default maximums are 1,024 records and 1 MiB of accounted fields per batch. A value is capped at
+256 KiB and a key at 4 KiB. Each record allows at most 16 headers and 4 KiB combined header bytes.
+These counts do not include interpreter overhead, source client buffers, copies made by a
+processor, or Protobuf framing. The process adapter separately enforces a 1 MiB serialized request
+and response limit.
 
-The package README does not name `ORBIT_*` variables. Use its typed constructors and application configuration, and confirm exact runtime inputs in the implementation before deployment.
+`process_many()` defaults to eight in-flight batches and accepts an explicit concurrency between
+one and 128. This is a per-call bound, not a global application capacity limit. Multiple concurrent
+calls can exceed it; establish an application-wide admission limit where required. Lower
+concurrency reduces memory and downstream pressure, while increasing it can improve utilization
+for I/O-bound processors. Output order follows source order, so a slow early batch can hold back
+later results even when those processors have completed.
 
-Use the package README's constructor and deployment examples. Store credentials in a secret manager and avoid logging credentials, raw provider errors, request data, or opaque cursors.
+## Lifecycle and cancellation
 
-## Lifecycle, failure behavior, and limits
+The pipeline owns no network client or processor lifecycle. The application must close any
+resources used by a processor. `ProcessStreamProcessor.aclose()` marks that adapter closed and
+rejects later calls; it does not stop the Core process. Core owns local plugin startup, health, and
+shutdown. Coordinate application shutdown so no new batches are submitted, in-flight work is
+drained or cancelled within the service deadline, and owned resources are then closed.
 
-`orbit-streams` provides bounded, provider-neutral stream records and async batch-transform
-contracts for Orbit applications. It is a Python package for Python 3.11–3.14 and has no runtime
-dependencies.
+Pipeline cancellation propagates to active processor calls. `process_many()` cancels and joins
+outstanding tasks after cancellation or failure. Custom processors must not swallow cancellation
+or perform unbounded synchronous work on the event loop. A process RPC has a configurable deadline
+(default five seconds, range 50 ms to 60 seconds); timeout does not prove the remote process had no
+side effects.
 
-```bash
-python -m pip install orbit-streams
-```
+## Failure and replay
 
-## Delivery and broker boundaries
-
-This package transforms batches. It does not read or persist records, acknowledge offsets, checkpoint
-state, retry failures, provide ordering across batches, or guarantee delivery. Broker adapters such
-as `orbit-events-kafka`, `orbit-events-rabbitmq`, and `orbit-events-nats` own transport, offset acknowledgement, and
-recovery. Applications should acknowledge a source batch only after processing and downstream
-handling succeeds. Retrying a processor is the caller's decision because side effects may not be
-idempotent.
-
-The implementation is an in-process Python pipeline, not a durable stream engine. It does not claim
-end-to-end Rust acceleration: process startup, gRPC, Protobuf, and copies have costs. The separately
-installable `orbit-streams-rust` package performs the same bounded batch transformation in a
-Core-supervised Rust process for workloads where profiling shows the transformation is a bottleneck.
-Both complete implementations use the same typed capability contract, and application wiring
-chooses one explicitly. Benchmark real payloads and batch sizes before selecting Rust; this package
-makes no blanket performance claim.
-
-Install `orbit-streams[process]` to use the Core process adapter:
-
-```python
-from orbit_streams import ProcessStreamProcessor, StreamPipeline
-
-processor = ProcessStreamProcessor(core_managed_process_plugin)
-pipeline = StreamPipeline([processor])
-```
-
-Configure Core's `ProcessPlugin` with the Rust executable, capability `orbit.streams`, and that
-variant's configuration. The adapter translates bounded `StreamRecord` batches to
-`orbit.streams.v1.BatchProcessor/Process`. Core owns child lifecycle and the adapter does not.
+Processor failures are sanitized and identify the pipeline stage; process adapter failures and
+invalid Protobuf output also fail the batch. No component retries automatically. Replaying a failed
+batch can repeat side effects, and this package does not coordinate source offsets with downstream
+writes. Keep processors pure where possible. Otherwise, use application-level idempotency or a
+transaction protocol supported by both the selected source and sink.
 
 ## Production validation
 
-Validate startup/shutdown cleanup, timeout and cancellation behavior, concurrency and payload bounds where applicable, secret rotation and least-privilege access, data durability, backup/restore, and failover against the selected provider. Do not infer distributed or durable guarantees from an in-process API or fake-client tests.
+Test representative data volumes, burst concurrency, slow processors, cancellation, process
+startup and shutdown, RPC deadlines, malformed plugin output, and source acknowledgement ordering.
+Observe queue lag, batch sizes, processing latency, failures, and process health through the host's
+metrics/logging/tracing integrations. The package exports no broker, durable checkpoint service,
+metrics endpoint, or health endpoint; do not infer their existence from the batch API.
