@@ -22,7 +22,7 @@ process = [
   "orbit-core[process-plugins]>=0.1.0a1,<0.2",
   "protobuf>=7.35.1,<8",
 ]
-dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.8,<1", "mypy>=1.13,<2", "build>=1.2,<2", "grpcio-tools>=1.84,<2", "mypy-protobuf>=3.6,<4"]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.8,<1", "mypy>=1.13,<3", "build>=1.2,<2", "grpcio-tools>=1.84,<2", "mypy-protobuf>=3.6,<4"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/orbit_streams"]
