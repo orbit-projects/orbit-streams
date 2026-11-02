@@ -1,55 +1,71 @@
-# Orbit Streams: architecture and boundaries
+# Orbit Streams architecture
 
-## Responsibility
+`orbit-streams` is a provider-neutral, in-process batch transformation capability. It defines
+bounded immutable records, a processor protocol, an ordered pipeline, and an optional adapter for
+invoking a Core-supervised process implementation over the typed Protobuf contract. It is not a
+broker consumer, durable stream engine, or stream-processing cluster.
 
-`orbit-streams` provides bounded, provider-neutral stream records and async batch-transform
-contracts for Orbit applications. It is a Python package for Python 3.11–3.14 and has no runtime
-dependencies.
-
-```bash
-python -m pip install orbit-streams
+```text
+source/broker adapter ──> StreamBatch ──> StreamPipeline ──> application sink
+                                   └── optional ProcessStreamProcessor
+                                        └── Core-supervised orbit.streams plugin
 ```
 
-## Declared dependencies
+The application or broker adapter owns reads, offsets, acknowledgements, checkpoints, retries,
+ordering between batches, and durable output. A source should be acknowledged or committed only
+after the application has successfully handled the transformed output. Whether this is safe across
+crashes depends on the source and sink transaction model; this package does not provide one.
 
-The following dependency declarations come from the checked-in manifests. Optional groups and development dependencies are called out separately.
+## Data model and bounds
 
-### `pyproject.toml`
-- No dependencies declared.
-- Optional `process` group: `orbit-core[process-plugins]>=0.1.0a1,<0.2`, `protobuf>=7.35.1,<8`.
-- Optional `dev` group: `pytest>=8,<10`, `pytest-asyncio>=0.24,<2`, `ruff>=0.8,<1`, `mypy>=1.13,<2`, `build>=1.2,<2`, `grpcio-tools>=1.84,<2`, `mypy-protobuf>=3.6,<4`.
+`StreamRecord` contains a bounded ASCII record identifier, bytes value, non-negative signed 64-bit
+millisecond timestamp, optional bytes key, printable ASCII content type, and immutable bounded
+headers. The value is at most 256 KiB; the key is at most 4 KiB; a record has at most 16 headers;
+each header value is at most 256 UTF-8 bytes; and header name/value bytes total at most 4 KiB.
 
-Declared dependencies do not mean that optional providers or services are bundled with this package.
+`StreamBatch` accepts at most 1,024 records and accounts at most 1 MiB of user-controlled fields
+across the records. The accounting includes values, keys, IDs, content types, and headers, but not
+Python object overhead or Protobuf wire framing. `ProcessStreamProcessor` separately rejects
+requests and responses over the 1 MiB Protobuf wire limit. A configured lower batch bound is
+preserved across every pipeline stage and process call.
 
-## Implementation layout
+Payload, key, headers, and record ID are omitted from repr output. This is a reduction in accidental
+logging exposure, not encryption or a prohibition on explicit access by processors.
 
-Representative implementation files in this checkout:
+## Execution semantics
 
-- `src/orbit_streams/__init__.py`
-- `src/orbit_streams/process.py`
-- `src/orbit_streams/streaming.py`
-- `src/orbit_streams/v1/__init__.py`
-- `src/orbit_streams/v1/stream_processing_pb2.py`
+`StreamPipeline` runs processors sequentially within each batch. A stage may filter records by
+returning an empty sequence. Every stage output is bounded and reconstructed as validated
+`StreamRecord` values before the next stage runs. Processor exceptions become `ProcessorError`
+without the original exception message or cause; cancellation propagates.
 
-## Public contract and scope
+`process_many()` bounds in-flight batches, pauses source pulling while that bound is full, and
+emits results in source order. This deliberately introduces head-of-line waiting: a slow earlier
+batch delays later completed output. On cancellation or a failed source/result, outstanding
+processor tasks are cancelled and joined. Processor code must cooperate with cancellation because
+Python cannot forcibly stop arbitrary work.
 
-## Processing contract
+The pipeline and process adapter own no business processor resources. The application manages
+processor clients and the Core process lifecycle. `ProcessStreamProcessor.aclose()` prevents new
+calls; it does not stop or deactivate Core's process plugin.
 
-`StreamRecord` snapshots immutable bytes and bounded headers. `StreamBatch` limits each batch to at
-most 1,024 records and 1 MiB of user-controlled fields. A record value is limited to 256 KiB; a key
-to 4 KiB; and headers to 16 entries and 4 KiB total. Payloads, keys, headers, and record identifiers
-are omitted from record representations.
+## Python and Rust choices
 
-Implement `BatchProcessor.process(records)` as an async transformation. A `StreamPipeline` runs up
-to 32 processors in order and validates each intermediate output against the same bounds. Filters
-may return an empty sequence. Failures become `ProcessorError` without exposing provider exception
-text; task cancellation propagates.
+The Python implementation is the required baseline and is appropriate for I/O-heavy or moderate
+transformations. `orbit-streams-rust` is an optional full transformation implementation behind the
+same typed service contract for workloads where profiling shows Python execution to be material.
+RPC serialization, copies, process supervision, and startup are costs; no speedup is guaranteed.
+Benchmark representative record size, batch size, concurrency, and failure/restart behavior before
+selecting an implementation. A process plugin is a local capability boundary, not a new broker or
+general microservice deployment mechanism.
 
-`process_many()` limits in-flight batches to a caller-selected concurrency between 1 and 128. It
-preserves source order, stops pulling while the bound is full, and cancels and joins pending work on
-failure or cancellation. Processors must cooperate with task cancellation. The pipeline owns no
-processor resources; application lifecycle code owns any resources used by processor implementations.
+## Failure and delivery boundary
 
-## Boundary rules
+There is no implicit retry, dead-letter behavior, durability, exactly-once processing, cross-batch
+ordering, or source acknowledgement. Retry only where replay is safe for processor side effects.
+Broker adapters own offsets and acknowledgements and must define how transformation completion
+relates to committing a source record. A process call failure may leave processor side effects
+ambiguous; a retry can repeat them.
 
-Keep provider SDKs, credentials, transports, and provider-specific error translation in provider adapters. Keep reusable capability contracts in the matching capability package and lifecycle orchestration in Core. Apply the relevant layer for this repository and preserve the dependency direction shown above.
+The package is alpha. Python/Rust wire conformance, supported Core versions, local process
+failure recovery, and representative performance remain release validation concerns.

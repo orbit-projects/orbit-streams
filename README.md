@@ -72,7 +72,7 @@ python -m build
 
 Tests use deterministic processors and do not require a broker. Live broker delivery, restart
 recovery, deployment, Python/Rust host conformance, and sustained-load behavior are not covered by
-the in-process tests. This package is pre-alpha, not a production certification.
+the in-process tests. This package is alpha, not a production certification.
 
 Licensed under Apache-2.0.
 
